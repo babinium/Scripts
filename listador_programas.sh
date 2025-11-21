@@ -1,17 +1,17 @@
 #!/bin/bash
 
-# Script para listar programas instalados, agrupados por tipo de paquete y letra.
+# Script para listar programas instalados, con opciones de filtrado y agrupados por tipo.
 
 # --- Definición de Colores y Estilos ---
 export BOLD_CYAN=$(printf '\033[1;36m')
-export GREEN=$(printf '\033[1;32m')
 export NC=$(printf '\033[0m')
 
 # --- Función de Formateo Portátil ---
+# Recibe la entrada de una lista de programas, los agrupa por letra y los imprime.
 format_and_print() {
     # awk agrupa los paquetes por letra, sort los ordena alfabéticamente,
     # y sed se encarga del formato final.
-    awk '
+    awk ' \
     {
         if ($0 ~ /^[[:space:]]*$/) next; # Ignorar líneas vacías
         char = toupper(substr($0, 1, 1));
@@ -36,29 +36,100 @@ print_header() {
     echo ""
 }
 
-# --- SECCIÓN 1: Paquetes .deb ---
-print_header "Programas instalados como paquetes .deb"
-dpkg-query -W -f='${binary:Package}\n' | grep -v -- '-dev\b' | format_and_print
+# --- Función Auxiliar para procesar archivos .desktop ---
+# Argumentos: Directorios donde buscar los archivos .desktop
+process_desktop_files() {
+    declare -a dirs_to_process=($@)
+    local output
 
-# --- SECCIÓN 2: Paquetes Flatpak ---
-if command -v flatpak &> /dev/null; then
-    print_header "Programas instalados como Flatpaks"
-    # Usamos '--columns=application' para obtener un ID único y consistente.
-    flatpak list --app --columns=application | format_and_print
-else
-    print_header "Flatpak no encontrado"
-    echo "El gestor de paquetes Flatpak no parece estar instalado."
-fi
+    output=$(find "${dirs_to_process[@]}" -maxdepth 1 -type f -name "*.desktop" 2>/dev/null -exec awk -F= ' \
+        BEGIN {
+            name_es="";
+            name_generic="";
+            nodisplay=0;
+        }
+        /^Name\[es\]=/ { name_es=$2; }
+        /^Name=/ { if (name_generic == "") name_generic=$2; }
+        /^NoDisplay=true/ { nodisplay=1; }
+        END {
+            if (nodisplay == 0) {
+                if (name_es != "") {
+                    print name_es;
+                } else if (name_generic != "") {
+                    print name_generic;
+                }
+            }
+        }' {} \;)
+    
+    if [ -n "$output" ]; then
+        echo "$output" | sort -u | format_and_print
+    else
+        echo "  No se encontraron aplicaciones en esta categoría."
+        echo ""
+    fi
+}
 
-# --- SECCIÓN 3: Paquetes Snap ---
-if command -v snap &> /dev/null; then
-    print_header "Programas instalados como Snaps"
-    # Tomamos solo la primera columna (nombre del paquete) del listado.
-    snap list | awk 'NR>1 {print $1}' | format_and_print
-else
-    print_header "Snap no encontrado"
-    echo "El gestor de paquetes Snap no parece estar instalado."
-fi
+
+# --- FUNCIÓN OPCIÓN 1: Mostrar solo aplicaciones del menú, AGRUPADAS ---
+mostrar_aplicaciones_menu() {
+    
+    print_header "Menú: Paquetes APT/Debian (.deb)"
+    process_desktop_files "/usr/share/applications"
+
+    if command -v flatpak &> /dev/null; then
+        print_header "Menú: Aplicaciones Flatpak"
+        process_desktop_files "/var/lib/flatpak/exports/share/applications"
+    fi
+
+    if command -v snap &> /dev/null; then
+        print_header "Menú: Aplicaciones Snap"
+        process_desktop_files "/var/lib/snapd/desktop/applications"
+    fi
+    
+    print_header "Menú: Aplicaciones de Usuario (.local)"
+    process_desktop_files "$HOME/.local/share/applications"
+    
+    echo "Nota: Lista generada de accesos directos (.desktop). Puede no ser exhaustiva."
+}
+
+# --- FUNCIÓN OPCIÓN 2: Mostrar todos los paquetes ---
+mostrar_todo() {
+    # SECCIÓN 1: Paquetes .deb
+    print_header "Todos: Paquetes .deb (APT/dpkg)"
+    dpkg-query -W -f='${binary:Package}\n' | grep -v -- '-dev\b' | format_and_print
+
+    # SECCIÓN 2: Paquetes Flatpak
+    if command -v flatpak &> /dev/null; then
+        print_header "Todos: Aplicaciones Flatpak"
+        flatpak list --app --columns=application | format_and_print
+    fi
+
+    # SECCIÓN 3: Paquetes Snap
+    if command -v snap &> /dev/null; then
+        print_header "Todos: Aplicaciones Snap"
+        snap list | awk 'NR>1 {print $1}' | format_and_print
+    fi
+}
+
+# --- MENÚ DE SELECCIÓN ---
+echo "Seleccione una opción:"
+echo "1) Mostrar solo programas del MENÚ DE APLICACIONES (agrupados por tipo)"
+echo "2) Mostrar TODOS los paquetes instalados (agrupados por tipo)"
+echo ""
+read -p "Opción [1-2]: " choice
+
+case $choice in
+    1)
+        mostrar_aplicaciones_menu
+        ;;
+    2)
+        mostrar_todo
+        ;;
+    *)
+        echo "Opción no válida. Saliendo."
+        exit 1
+        ;;
+esac
 
 echo ""
 echo "---------------------------------------------------------------------"
